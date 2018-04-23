@@ -26,67 +26,80 @@ flags.DEFINE_float('lr', 0.0002, 'initial learning rate for adam')
 
 
 def train(dataset, load_size, crop_size, epoch, batch_size, lr):
-    """ graph """
+    """ <--- graph --->"""
+
     # models
-    generator_a2b = partial(models.generator, scope='a2b')
-    generator_b2a = partial(models.generator, scope='b2a')
-    discriminator_a = partial(models.discriminator, scope='a')
-    discriminator_b = partial(models.discriminator, scope='b')
+    generator_G = partial(models.generator, scope='G')
+    generator_F = partial(models.generator, scope='F')
+    discriminator_G = partial(models.discriminator, scope='G')
+    discriminator_F = partial(models.discriminator, scope='F')
 
     # operations
-    a_real = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
-    b_real = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
-    a2b_sample = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
-    b2a_sample = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
+    X_real = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
+    Y_real = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
+    GoX_sample = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
+    FoY_sample = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
 
-    a2b = generator_a2b(a_real)
-    b2a = generator_b2a(b_real)
-    b2a2b = generator_a2b(b2a)
-    a2b2a = generator_b2a(a2b)
+    # Passing images through Generators
+    GoX = generator_G(X_real)
+    FoY = generator_F(Y_real)
 
-    a_logit = discriminator_a(a_real)
-    b2a_logit = discriminator_a(b2a)
-    b2a_sample_logit = discriminator_a(b2a_sample)
-    b_logit = discriminator_b(b_real)
-    a2b_logit = discriminator_b(a2b)
-    a2b_sample_logit = discriminator_b(a2b_sample)
+    # Completing Cycle
+    GoFoY = generator_G(FoY)
+    FoGoX = generator_F(GoX)
 
-    # losses
-    g_loss_a2b = tf.losses.mean_squared_error(a2b_logit, tf.ones_like(a2b_logit))
-    g_loss_b2a = tf.losses.mean_squared_error(b2a_logit, tf.ones_like(b2a_logit))
-    cyc_loss_a = tf.losses.absolute_difference(a_real, a2b2a)
-    cyc_loss_b = tf.losses.absolute_difference(b_real, b2a2b)
-    g_loss = g_loss_a2b + g_loss_b2a + cyc_loss_a * 10.0 + cyc_loss_b * 10.0
+    # Ground Truth Logits
+    X_logit = discriminator_G(X_real)
+    Y_logit = discriminator_F(Y_real)
 
-    d_loss_a_real = tf.losses.mean_squared_error(a_logit, tf.ones_like(a_logit))
-    d_loss_b2a_sample = tf.losses.mean_squared_error(b2a_sample_logit, tf.zeros_like(b2a_sample_logit))
-    d_loss_a = d_loss_a_real + d_loss_b2a_sample
+    # Generated Image Logits
+    FoY_logit = discriminator_G(FoY)
+    GoX_logit = discriminator_F(GoX)
 
-    d_loss_b_real = tf.losses.mean_squared_error(b_logit, tf.ones_like(b_logit))
-    d_loss_a2b_sample = tf.losses.mean_squared_error(a2b_sample_logit, tf.zeros_like(a2b_sample_logit))
-    d_loss_b = d_loss_b_real + d_loss_a2b_sample
+    # Cycled Image Logits
+    FoY_sample_logit = discriminator_G(FoY_sample)
+    GoX_sample_logit = discriminator_F(GoX_sample)
+
+    # Generator Loss
+    g_loss_GoX = tf.losses.mean_squared_error(GoX_logit, tf.ones_like(GoX_logit))
+    g_loss_FoY = tf.losses.mean_squared_error(FoY_logit, tf.ones_like(FoY_logit))
+
+    # Cycle Loss
+    cyc_loss_X = tf.losses.absolute_difference(X_real, FoGoX)
+    cyc_loss_Y = tf.losses.absolute_difference(Y_real, GoFoY)
+
+    # Generator Net Loss
+    g_loss = g_loss_GoX + g_loss_FoY + (cyc_loss_X + cyc_loss_Y) * 10.0
+
+    d_loss_X_real = tf.losses.mean_squared_error(X_logit, tf.ones_like(X_logit))
+    d_loss_FoY_sample = tf.losses.mean_squared_error(FoY_sample_logit, tf.zeros_like(FoY_sample_logit))
+    d_loss_X = d_loss_X_real + d_loss_FoY_sample
+
+    d_loss_Y_real = tf.losses.mean_squared_error(Y_logit, tf.ones_like(Y_logit))
+    d_loss_GoX_sample = tf.losses.mean_squared_error(GoX_sample_logit, tf.zeros_like(GoX_sample_logit))
+    d_loss_Y = d_loss_Y_real + d_loss_GoX_sample
 
     # summaries
-    g_summary = utils.summary({g_loss_a2b: 'g_loss_a2b',
-                               g_loss_b2a: 'g_loss_b2a',
-                               cyc_loss_a: 'cyc_loss_a',
-                               cyc_loss_b: 'cyc_loss_b'})
-    d_summary_a = utils.summary({d_loss_a: 'd_loss_a'})
-    d_summary_b = utils.summary({d_loss_b: 'd_loss_b'})
+    g_summary = utils.summary({g_loss_GoX: 'g_loss_GoX',
+                               g_loss_FoY: 'g_loss_FoY',
+                               cyc_loss_X: 'cyc_loss_X',
+                               cyc_loss_Y: 'cyc_loss_Y'})
+    d_summary_X = utils.summary({d_loss_X: 'd_loss_X'})
+    d_summary_Y = utils.summary({d_loss_Y: 'd_loss_Y'})
 
     # optim
     t_var = tf.trainable_variables()
-    d_a_var = [var for var in t_var if 'a_discriminator' in var.name]
-    d_b_var = [var for var in t_var if 'b_discriminator' in var.name]
-    g_var = [var for var in t_var if 'a2b_generator' in var.name or 'b2a_generator' in var.name]
+    d_X_var = [var for var in t_var if 'G_discriminator' in var.name]
+    d_Y_var = [var for var in t_var if 'F_discriminator' in var.name]
+    g_var = [var for var in t_var if 'G_generator' in var.name or 'F_generator' in var.name]
 
-    d_a_train_op = tf.train.AdamOptimizer(lr, beta1=0.5).minimize(d_loss_a, var_list=d_a_var)
-    d_b_train_op = tf.train.AdamOptimizer(lr, beta1=0.5).minimize(d_loss_b, var_list=d_b_var)
+    d_X_train_op = tf.train.AdamOptimizer(lr, beta1=0.5).minimize(d_loss_X, var_list=d_X_var)
+    d_Y_train_op = tf.train.AdamOptimizer(lr, beta1=0.5).minimize(d_loss_Y, var_list=d_Y_var)
     g_train_op = tf.train.AdamOptimizer(lr, beta1=0.5).minimize(g_loss, var_list=g_var)
 
-    """ train """
-    ''' init '''
-    # session
+    """ <-- TRAIN [init] -->"""
+
+    # Session Configuration [ADD FALSE IF USING CPU]
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
@@ -95,18 +108,18 @@ def train(dataset, load_size, crop_size, epoch, batch_size, lr):
     it_cnt, update_cnt = utils.counter()
 
     ''' data '''
-    a_img_paths = glob('./datasets/' + dataset + '/trainA/*.jpg')
-    b_img_paths = glob('./datasets/' + dataset + '/trainB/*.jpg')
-    a_data_pool = data.ImageData(sess, a_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
-    b_data_pool = data.ImageData(sess, b_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
+    X_img_paths = glob('./datasets/' + dataset + '/trainA/*.jpg')
+    Y_img_paths = glob('./datasets/' + dataset + '/trainB/*.jpg')
+    X_data_pool = data.ImageData(sess, X_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
+    Y_data_pool = data.ImageData(sess, Y_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
 
-    a_test_img_paths = glob('./datasets/' + dataset + '/testA/*.jpg')
-    b_test_img_paths = glob('./datasets/' + dataset + '/testB/*.jpg')
-    a_test_pool = data.ImageData(sess, a_test_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
-    b_test_pool = data.ImageData(sess, b_test_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
+    X_test_img_paths = glob('./datasets/' + dataset + '/testA/*.jpg')
+    Y_test_img_paths = glob('./datasets/' + dataset + '/testB/*.jpg')
+    X_test_pool = data.Imagebatch_sizeData(sess, X_test_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
+    Y_test_pool = data.ImageData(sess, Y_test_img_paths, batch_size, load_size=load_size, crop_size=crop_size)
 
-    a2b_pool = utils.ItemPool()
-    b2a_pool = utils.ItemPool()
+    GoX_pool = utils.ItemPool()
+    FoY_pool = utils.ItemPool()
 
     ''' summary '''
     summary_writer = tf.summary.FileWriter('./outputs/summaries/' + dataset, sess.graph)
@@ -124,7 +137,7 @@ def train(dataset, load_size, crop_size, epoch, batch_size, lr):
 
     '''train'''
     try:
-        batch_epoch = min(len(a_data_pool), len(b_data_pool)) // batch_size
+        batch_epoch = min(len(X_data_pool), len(Y_data_pool)) // batch_size
         max_it = epoch * batch_epoch
         for it in range(sess.run(it_cnt), max_it):
             sess.run(update_cnt)
@@ -132,23 +145,25 @@ def train(dataset, load_size, crop_size, epoch, batch_size, lr):
             it_epoch = it % batch_epoch + 1
 
             # prepare data
-            a_real_ipt = a_data_pool.batch()
-            b_real_ipt = b_data_pool.batch()
-            a2b_opt, b2a_opt = sess.run([a2b, b2a], feed_dict={a_real: a_real_ipt, b_real: b_real_ipt})
-            a2b_sample_ipt = np.array(a2b_pool(list(a2b_opt)))
-            b2a_sample_ipt = np.array(b2a_pool(list(b2a_opt)))
+            X_real_ipt = X_data_pool.batch()
+            Y_real_ipt = Y_data_pool.batch()
+            GoX_opt, FoY_opt = sess.run([GoX, FoY], feed_dict={X_real: X_real_ipt, Y_real: Y_real_ipt})
+            GoX_sample_ipt = np.array(GoX_pool(list(GoX_opt)))
+            FoY_sample_ipt = np.array(FoY_pool(list(FoY_opt)))
 
             # train G
-            g_summary_opt, _ = sess.run([g_summary, g_train_op], feed_dict={a_real: a_real_ipt, b_real: b_real_ipt})
+            g_summary_opt, _ = sess.run([g_summary, g_train_op], feed_dict={X_real: X_real_ipt, Y_real: Y_real_ipt})
             summary_writer.add_summary(g_summary_opt, it)
-            # train D_b
-            d_summary_b_opt, _ = sess.run([d_summary_b, d_b_train_op], feed_dict={b_real: b_real_ipt, a2b_sample: a2b_sample_ipt})
-            summary_writer.add_summary(d_summary_b_opt, it)
-            # train D_a
-            d_summary_a_opt, _ = sess.run([d_summary_a, d_a_train_op], feed_dict={a_real: a_real_ipt, b2a_sample: b2a_sample_ipt})
-            summary_writer.add_summary(d_summary_a_opt, it)
 
-            # display
+            # train D_y
+            d_summary_Y_opt, _ = sess.run([d_summary_Y, d_Y_train_op], feed_dict={Y_real: Y_real_ipt, GoX_sample: GoX_sample_ipt})
+            summary_writer.add_summary(d_summary_Y_opt, it)
+
+            # train D_x
+            d_summary_X_opt, _ = sess.run([d_summary_X, d_X_train_op], feed_dict={X_real: X_real_ipt, FoY_sample: FoY_sample_ipt})
+            summary_writer.add_summary(d_summary_X_opt, it)
+
+            # Verbose
             if it % 1 == 0:
                 print("Epoch: (%3d) (%5d/%5d)" % (epoch, it_epoch, batch_epoch))
 
@@ -159,10 +174,10 @@ def train(dataset, load_size, crop_size, epoch, batch_size, lr):
 
             # sample
             if (it + 1) % 100 == 0:
-                a_real_ipt = a_test_pool.batch()
-                b_real_ipt = b_test_pool.batch()
-                [a2b_opt, a2b2a_opt, b2a_opt, b2a2b_opt] = sess.run([a2b, a2b2a, b2a, b2a2b], feed_dict={a_real: a_real_ipt, b_real: b_real_ipt})
-                sample_opt = np.concatenate((a_real_ipt, a2b_opt, a2b2a_opt, b_real_ipt, b2a_opt, b2a2b_opt), axis=0)
+                X_real_ipt = X_test_pool.batch()
+                Y_real_ipt = Y_test_pool.batch()
+                [GoX_opt, FoGoX_opt, FoY_opt, GoFoY_opt] = sess.run([GoX, FoGoX, FoY, GoFoY], feed_dict={X_real: X_real_ipt, Y_real: Y_real_ipt})
+                sample_opt = np.concatenate((X_real_ipt, GoX_opt, FoGoX_opt, Y_real_ipt, FoX_opt, GoFoY_opt), axis=0)
 
                 save_dir = './outputs/sample_images_while_training/' + dataset
                 utils.mkdir(save_dir)
@@ -173,8 +188,50 @@ def train(dataset, load_size, crop_size, epoch, batch_size, lr):
         sess.close()
 
 
-def test():
-    pass
+def test(dataset, crop_size):
+    """ run """
+    with tf.Session() as sess:
+        X_real = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
+        Y_real = tf.placeholder(tf.float32, shape=[None, crop_size, crop_size, 3])
+
+        GoX = models.generator(X_real, 'G')
+        FoY = models.generator(Y_real, 'F')
+        GoFoY = models.generator(FoY, 'G')
+        FoGoX = models.generator(GoX, 'F')
+
+        # retore
+        try:
+            ckpt_path = utils.load_checkpoint('./outputs/checkpoints/' + dataset, sess)
+        except:
+            raise Exception('No checkpoint!')
+
+        # test
+        X_list = glob('./datasets/' + dataset + '/testA/*.jpg')
+        Y_list = glob('./datasets/' + dataset + '/testB/*.jpg')
+
+        X_save_dir = './outputs/test_predictions/' + dataset + '/testA'
+        Y_save_dir = './outputs/test_predictions/' + dataset + '/testB'
+        utils.mkdir([X_save_dir, Y_save_dir])
+
+        for i in range(len(X_list)):
+            X_real_ipt = im.imresize(im.imread(X_list[i]), [crop_size, crop_size])
+            X_real_ipt.shape = 1, crop_size, crop_size, 3
+            GoX_opt, FoGoX_opt = sess.run([GoX, FoGoX], feed_dict={X_real: X_real_ipt})
+            X_img_opt = np.concatenate((X_real_ipt, GoX_opt, FoGoX_opt), axis=0)
+
+            img_name = os.path.basename(X_list[i])
+            im.imwrite(im.immerge(X_img_opt, 1, 3), X_save_dir + '/' + img_name)
+            print('Save %s' % (X_save_dir + '/' + img_name))
+
+        for i in range(len(Y_list)):
+            Y_real_ipt = im.imresize(im.imread(Y_list[i]), [crop_size, crop_size])
+            Y_real_ipt.shape = 1, crop_size, crop_size, 3
+            FoY_opt, GoFoY_opt = sess.run([FoY, GoFoY], feed_dict={Y_real: Y_real_ipt})
+            Y_img_opt = np.concatenate((Y_real_ipt, FoY_opt, GoFoY_opt), axis=0)
+
+            img_name = os.path.basename(Y_list[i])
+            im.imwrite(im.immerge(Y_img_opt, 1, 3), Y_save_dir + '/' + img_name)
+            print('Save %s' % (Y_save_dir + '/' + img_name))
 
 
 def main(_):
@@ -184,6 +241,9 @@ def main(_):
 
     # Start training
     train(FLAGS.dataset, FLAGS.load_size, FLAGS.crop_size, FLAGS.epoch, FLAGS.batch_size, FLAGS.lr)
+
+    # Start testing
+    test(FLAGS.dataset, FLAGS.crop_size)
 
 
 if __name__ == '__main__':
